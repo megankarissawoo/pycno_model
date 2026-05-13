@@ -1,0 +1,239 @@
+---
+title: "no_nutritional"
+author: "Megan Woo"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+The following code was adapted from Galloway et al. to model the 
+predator-prey dynamics of Pycnopodia and urchins under various outplanting 
+scenarios. The equations used in the model are: 
+
+dU/dt = i*U*(1 - U/K) - [p*q*U*S / (1 + b*U + c*O)]
+dS/dt = e * [[p*Q*U*S / (1+b*U + c_o*O)] + p*q*O*S / (1+b*U + c_o*O)] * [S/(S+g)]  -- * [(1 - U/K)^z] term removed 
+
+Variable -> code 
+  U -> N[4]           urchin density (prey)
+  S -> N[1]           sea star density (predator)
+  O -> N[2] + N[3]    alternative prey (susceptible + non-susceptible)
+  i -> pars$rec       fixed urchin recruitment 
+  K -> pars$K_U       urchin carrying capacity (barren conditions)
+  p -> pars$rho_u     predator preference for urchins
+  q -> pars$alpha     predator search/attack rate 
+  b -> pars$b_u       urchin saturation coefficient
+  c -> pars$c_o       alternative prey saturation coefficient
+  e -> pars$e         conversion efficiency of urchin biomass to Pycnopodia population growth
+  g -> pars$g         Allee effect threshold parameter
+  z -> pars$z         weight of nutritional impact *** removed 
+  d -> pars$d         Pycnopodia mortality rate
+  r -> pars$r         Growth rate for alternative prey
+  K_alt -> pars$K_alt Carrying capacity for alternative prey
+  exchange -> pars$exchange 
+  
+
+Load libraries  
+```{r}
+library(deSolve)
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+```
+
+Setting up the differential equations
+```{r}
+diffyq <- function(t, N, pars) {
+
+  S <- max(N[1], 0)   # Pycnopodia density
+  U <- max(N[4], 0)   # urchin density
+  
+  X1 <- max(N[2], 0)  # susceptible alternative prey
+  X2 <- max(N[3], 0)  # non-susceptible alternative prey
+  O <- X1 + X2  # total alternative prey (used in urchin equation denominator)
+
+
+  # Pycnopodia dynamics--------------------------------------------------------- 
+  #   birth term: e * [[p*q*U*S / (1+b*U + c_o*O)] * [(1 - U/K)^z] + (p*q*O*S / (1+b*U + c_o*O)] * [S/(S+g)]
+  #   death term: d * S
+
+  
+  urchin_consumption <- (pars$rho_u * pars$alpha * U * S) / (1 + pars$b_u * U + pars$c_o * O)
+  alt_consumption    <- (pars$rho_x * pars$alpha * O * S) / (1 + pars$b_u * U + pars$c_o * O)
+  
+  allee_effect <- S / (S + pars$g)
+  # nutritional_impact <- pmax(1 - U / pars$K_U, 0) ^ pars$z  # pmax prevents negative base, REMOVED 
+
+  birth_S <- pars$e * (urchin_consumption + alt_consumption) * allee_effect #nutritional impact REMOVED 
+  death_S <- pars$d * S
+
+  dSdt <- birth_S - death_S
+
+  # Urchin dynamics-------------------------------------------------------------
+  #   growth term: i*U*(1 - U/K)
+  #   predation:   p*q*U*S / (1 + b*U + c*O)
+  
+  growth_U   <- pars$rec * U * (1 - U / pars$K_U)
+  predation_U <- (pars$rho_u * pars$alpha * U * S) / (1 + pars$b_u * U + pars$c_o * O) 
+
+  dUdt <- growth_U - predation_U
+  
+  # Alternative prey -----------------------------------------------------------
+ 
+  # Alternative prey recruitment
+  recx <- pars$r * (X1 + X2) * (1 - (X1 + X2) / pars$K_alt)
+  
+  # Predation on alternative prey by Pycnopodia
+  predation_X1 <- (pars$rho_x * pars$alpha * X1 * S) / (1 + pars$b_u * U + pars$c_o * O)
+  predation_X2 <- (pars$rho_x * pars$alpha * X2 * S) / (1 + pars$b_u * U + pars$c_o * O)
+  
+  # Logistic growth + exchange between types - predation
+  dx1dt <- 0.5* recx + pars$exchange * (X2 - X1) - predation_X1
+  dx2dt <- 0.5 * recx + pars$exchange * (X1 - X2) - predation_X2
+
+
+  return(list(c(dSdt, dx1dt, dx2dt, dUdt)))
+}
+```
+
+Creating the parameters list 
+```{r}
+pars <- list(
+
+  # Predation / functional response
+  alpha  = 2.5,     # search / attack rate (Q), Galloway et al. uses alpha = 1000
+  rho_u  = 1,      # preference weight for urchins (P)
+  rho_x  = 1,    # preference weight for alt prey (eat alt prey half the time)
+  b_u    = 0.1,   # urchin saturation coefficient (b)
+  c_o    = 0.1,    # alt prey saturation coefficient (c)
+
+  # Urchin parameters
+  rec    = 0.5,        # fixed urchin recruitment
+  K_U    = 16.65,       # urchin carrying capacity
+  m      = 0.0833,     # urchin natural mortality rate
+
+  # Pycnopodia parameters 
+  e      = 0.05,        # conversion efficiency 
+  g      = 0.01,       # Allee effect threshold
+  z      = 0.3,        # nutritional value exponent; 1 = linear, >1 = convex penalty
+  d      = 0.03,      # sea star mortality - made this up!!! 
+  
+  # Alternative prey parameters
+  r        = 0.5,      # growth rate for alternative prey
+  K_alt    = 30,       # carrying capacity for alternative prey
+  exchange = 0.1      # exchange rate between susceptible and non-susceptible prey
+)
+```
+
+Run functions
+```{r}
+run_mods <- function(P0,
+                     g        = 0.01,
+                     d        = 0.03,
+                     z        = 0.3,
+                     rec      = 1,
+                     X0       = 30,
+                     K_U      = 16.65,
+                     Y0       = 10,  # initial urchin density 
+                     ode_fun,
+                     pars,
+                     n_iter   = 500,
+                     interval = 1) {
+
+  # Update parameters for this run
+  pars$g    <- g
+  pars$d    <- d
+  pars$z    <- z
+  pars$K_U  <- K_U
+  pars$rec  <- rec
+
+  # Run ODE  (state order: S, X1, X2, U)
+  out <- ode(
+    y     = c(P0, X0, X0, Y0),
+    times = seq(0, (n_iter - 1) * interval, by = interval),
+    func  = ode_fun,
+    parms = pars
+  )
+
+  data.frame(
+    time   = out[, 1],
+    pycno  = out[, 2],
+    X1     = out[, 3],
+    X2     = out[, 4],
+    urchin = out[, 5],
+    P0     = P0,
+    g      = g,
+    d      = d,
+    z      = z
+  )
+}
+
+# ------------------------------------------------------------------------------
+# Run scenarios
+# ------------------------------------------------------------------------------
+
+P0_vals <- c(0.0001, exp(seq(log(0.001), log(0.06), length.out = 18)))
+g_vals  <- c(0, 0.001, 0.01, 0.03)
+
+results <- expand.grid(P0 = P0_vals, g = g_vals) %>%
+  rowwise() %>%
+  do(run_mods(
+    P0       = .$P0,
+    g        = .$g,
+    ode_fun  = diffyq,
+    pars = pars,
+    n_iter   = 500
+  )) %>%
+  ungroup()
+
+```
+
+Plot results
+```{r}
+
+results <- results %>%
+  mutate(
+    P0_label = paste0("P0 = ", round(P0, 4)),
+    g_label  = factor(g, labels = c("No Allee (g=0)",
+                                     "Weak (g=0.001)",
+                                     "Moderate (g=0.01)",
+                                     "Strong (g=0.03)"))
+  )
+
+results_long <- results %>%
+  select(time, pycno, urchin, P0, P0_label, g_label) %>%
+  pivot_longer(cols      = c(pycno, urchin),
+               names_to  = "species",
+               values_to = "density") %>%
+  mutate(species = recode(species,
+                          "pycno"  = "Pycnopodia density",
+                          "urchin" = "Purple urchin density"))
+
+p_updated <- ggplot(results_long,
+                    aes(x = time, y = density,
+                        colour = P0, group = P0_label)) +
+  geom_line(alpha = 0.8, linewidth = 0.6) +
+  scale_colour_viridis_c(
+    trans   = "log10",
+    name    = expression(paste("Starting pycno density (", m^-2, ")")),
+    breaks  = c(0.0001, 0.001, 0.01, 0.06),
+    labels  = c("0.0001", "0.001", "0.01", "0.06 (historical)")
+  ) +
+  facet_grid(species ~ g_label, scales = "free_y") +
+  labs(
+    x = "Year",
+    y = expression(paste("Density (no. ", m^-2, ")"))
+  ) +
+  theme_bw() +
+  theme(
+    panel.grid       = element_blank(),
+    legend.position  = "bottom",
+    legend.key.width = unit(2, "cm"),
+    strip.background = element_blank(),
+    strip.text       = element_text(face = "bold")
+  ) +
+  guides(colour = guide_colourbar(title.position = "top", title.hjust = 0.5))
+p_updated
+```
