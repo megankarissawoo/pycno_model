@@ -38,6 +38,7 @@ Variable -> code
   urchin_refuge -> urchin_refuge    urchin density largely protected from predation
   rho_x  -> rho_x                   predator preference/attack weight on susceptible alt prey (X1)
   rho_x2 -> rho_x2                  predator preference/attack weight on non-susceptible alt prey (X2)
+  w -> w                            nutritional value of an urchin in an urchin barren 
 
 Load libraries
 
@@ -76,7 +77,8 @@ make_diffyq <- function(alpha,        # search / attack rate (Q)
                          r,           # growth rate for alternative prey
                          K_alt,       # carrying capacity for alternative prey
                          exchange,    # exchange rate between prey pools
-                         urchin_refuge # urchin density largely protected from predation
+                         urchin_refuge, # urchin density largely protected from predation
+                         w            # nutritional floor for urchins 
                          ) {
   # Returns this function below, taking arguments of t (current time), 
   # and N (current state vector)
@@ -87,7 +89,7 @@ make_diffyq <- function(alpha,        # search / attack rate (Q)
     X2 <- max(N[3], 0)  # non-susceptible alternative prey
     O <- X1 + X2         # total alternative prey
 
-    # Urchins hiding in refugia (crevices, cracks) are largely protected
+    # Urchins hiding in refugium are largely protected
     # from predation. Uses a smooth threshold instead to
     # avoid solver convergence issues at the refuge boundary.
     U_access <- pmin(smooth_floor(U - urchin_refuge, sharpness = 5), U)
@@ -102,13 +104,13 @@ make_diffyq <- function(alpha,        # search / attack rate (Q)
     # Only U_access (urchins above the refuge threshold) can actually be eaten.
     urchin_consumption <- (rho_u * alpha * U_access * S) / (1 + b_u * U + c_o * O)
 
-    # Alt prey consumption is now split by pool: X1 (susceptible) is eaten at
+    # Alt prey consumption is split by pool: X1 (susceptible) is eaten at
     # the normal rho_x rate, while X2 (non-susceptible / refuge pool) is eaten
     # at the much-reduced rho_x2 rate. 
     alt_consumption    <- (rho_x * alpha * X1 * S + rho_x2 * alpha * X2 * S) / (1 + b_u * U + c_o * O)
 
     allee_effect <- S / (S + g)
-    nutritional_impact <- pmax(1 - U / K_U, 0) ^ z
+    nutritional_impact <- w + (1-w) * pmax(K_U - U / K_U, 0) ^ z  
 
     birth_S <- e * (urchin_consumption * nutritional_impact + alt_consumption) * allee_effect
     death_S <- d * S
@@ -146,14 +148,15 @@ default_b_u            <- 0.1
 default_c_o            <- 0.1
 default_rec            <- 1
 default_K_U            <- 16.65
-default_e              <- 0.0004
+default_e              <- 0.0004 
 default_g              <- 0.01
-default_z              <- 0.3
-default_d              <- 0.03      
+default_z              <- 0.3   
+default_d              <- 0.03     
 default_r              <- 0.5
 default_K_alt          <- 30
 default_exchange       <- 0.1
-default_urchin_refuge  <- 0.5      
+default_urchin_refuge  <- 1
+default_w              <- 0.25
 ```
 
 Running the model
@@ -177,9 +180,10 @@ run_mods <- function(P0,
                       K_alt         = default_K_alt,
                       exchange      = default_exchange,
                       urchin_refuge = default_urchin_refuge,
+                      w             = default_w,
                       X0            = 30,  # initial alternative prey density 
                       Y0            = 16.65,  # initial urchin density
-                      n_iter        = 500, # simulates 500 years 
+                      n_iter        = 250, # simulates 500 years 
                       interval      = 1) {
 
   # Build a self-contained ODE function for this specific parameter set
@@ -187,7 +191,8 @@ run_mods <- function(P0,
     alpha = alpha, rho_u = rho_u, rho_x = rho_x, rho_x2 = rho_x2,
     b_u = b_u, c_o = c_o,
     rec = rec, K_U = K_U, e = e, g = g, z = z, d = d,
-    r = r, K_alt = K_alt, exchange = exchange, urchin_refuge = urchin_refuge
+    r = r, K_alt = K_alt, exchange = exchange, urchin_refuge = urchin_refuge, 
+    w = w
   )
 
   # Run ODE  (state order: S, X1, X2, U)
@@ -224,7 +229,7 @@ results <- expand.grid(P0 = P0_vals, g = g_vals) %>%
   do(run_mods(
     P0     = .$P0,
     g      = .$g,
-    n_iter = 500
+    n_iter = 250
   )) %>%
   ungroup()
 ```
@@ -323,7 +328,7 @@ ggplot(results_alt,
   guides(colour = guide_colourbar(title.position = "top", title.hjust = 0.5))
 ```
 
-Print equilbriums
+Print equilibriums
 
 ```{r}
 # Extract equilibrium values (mean of last 50 time steps)
