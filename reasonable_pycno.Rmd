@@ -140,11 +140,11 @@ make_diffyq <- function(alpha,        # search / attack rate (Q)
 Parameterization 
 
 ```{r}
-default_alpha          <- 654      # Galloway et al. uses alpha = 1000
+default_alpha          <- 100      # Galloway et al. uses alpha = 1000, reasonable commit used 654
 default_rho_u          <- 1
 default_rho_x          <- 1
 default_rho_x2         <- 0
-default_b_u            <- 0.1
+default_b_u            <- 1   # in reasonable was 0.1
 default_c_o            <- 0.1
 default_rec            <- 1
 default_K_U            <- 16.65
