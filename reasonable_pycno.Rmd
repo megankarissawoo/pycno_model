@@ -88,9 +88,9 @@ make_diffyq <- function(alpha,        # search / attack rate (Q)
     O <- X1 + X2         # total alternative prey
 
     # Urchins hiding in refugia (crevices, cracks) are largely protected
-    # from predation. Uses a smooth threshold instead of a hard pmax() to
+    # from predation. Uses a smooth threshold instead to
     # avoid solver convergence issues at the refuge boundary.
-    U_access <- smooth_floor(U - urchin_refuge, sharpness = 5)
+    U_access <- pmin(smooth_floor(U - urchin_refuge, sharpness = 5), U)
 
     # Pycno dynamics---------------------------------------------------
     
@@ -153,7 +153,7 @@ default_d              <- 0.03
 default_r              <- 0.5
 default_K_alt          <- 30
 default_exchange       <- 0.1
-default_urchin_refuge  <- 2       # urchin density protected from predation (~12% of K_U)
+default_urchin_refuge  <- 0.5      
 ```
 
 Running the model
